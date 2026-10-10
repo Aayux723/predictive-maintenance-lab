@@ -1,0 +1,257 @@
+# ACADEMIC PROJECT REPORT: PREDICTIVE MAINTENANCE EXPLAINABILITY LAB
+
+**Course:** B.Tech Computer Science and Engineering — Machine Learning Laboratory  
+**Project Title:** Predictive Maintenance Explainability Lab: Industrial Sensor Fault Classification and Root-to-Leaf Decision Path Diagnostics  
+**Dataset:** UCI AI4I 2020 Predictive Maintenance Dataset (Dataset ID: 601)  
+
+---
+
+## 1. ABSTRACT
+
+Predictive maintenance (PdM) systems aim to anticipate equipment failure before irreversible mechanical breakdown occurs. While machine learning classifiers—such as Decision Trees and Random Forests—demonstrate exceptional capability in modeling multi-sensor non-linear relationships, their deployment in safety-critical manufacturing is severely hindered by the "black-box" dilemma. Operators require verified transparency before acting upon predictive alarms. 
+
+This project presents the **Predictive Maintenance Explainability Lab**, a production-grade machine learning system built on the synthetic UCI AI4I 2020 Predictive Maintenance dataset (10,000 observations). We formulate a binary classification pipeline using strictly six input predictors, completely isolating potential data leakage from identifiers and auxiliary labels. 
+
+Using Stratified 5-Fold Cross-Validation optimizing Average Precision (PR-AUC), we tune an interpretable Decision Tree (constrained to max depth 6) and a Random Forest ensemble. On an untouched 2,000-sample test set (3.39% failure rate), the Decision Tree achieves an **86.76% Recall** (catching 59 of 68 failures, Balanced Accuracy: 90.43%), while the Random Forest achieves **98.60% Accuracy**, **90.00% Precision**, and an **ROC-AUC of 0.9737**. 
+
+Crucially, we engineer an interactive white-box diagnostic module—*Inside the Decision Tree*—which harnesses scikit-learn's internal `decision_path()` and `apply()` methods to compute and visualize the exact sequence of decision splits, threshold evaluations, and Gini impurity reductions for any machine observation in an interactive Plotly diagram.
+
+---
+
+## 2. INTRODUCTION
+
+Modern Industry 4.0 infrastructure relies on high-frequency IoT sensor networks to monitor heavy mechanical assets such as CNC milling machines, turbines, and chemical compressors. Sudden equipment failure causes catastrophic secondary mechanical destruction, safety hazards, and unscheduled downtime costing upwards of \$250,000 per hour in automated manufacturing.
+
+Traditional maintenance paradigms suffer from notable deficiencies:
+1. **Reactive Maintenance (Run-to-Failure)**: Machines operate until breakdown occurs, maximizing downtime and repair expense.
+2. **Preventive Maintenance (Time-Based)**: Parts are replaced according to rigid schedules regardless of actual wear, discarding functional components prematurely.
+3. **Predictive Maintenance (Condition-Based)**: Sensor measurements continuously monitor physical state, scheduling interventions only when degradation signals an imminent fault.
+
+While machine learning classifiers excel at this task, industrial plant operators refuse to halt active production lines without knowing **which sensor reading triggered the alarm** and **what threshold was crossed**. This project develops a complete machine learning lab demonstrating both high-fidelity predictive modeling and white-box model explainability.
+
+---
+
+## 3. OBJECTIVES
+
+1. **Strict Data Leakage Prevention**: Enforce rigorous data isolation by quarantining arbitrary identifiers (`UDI`, `Product ID`) and causal subset failure flags (`TWF`, `HDF`, `PWF`, `OSF`, `RNF`), training models purely on raw physical telemetry.
+2. **Handling Severe Class Imbalance**: Address the extreme 96.61% to 3.39% class disparity using class-weighted cost functions, stratified partitioning, and Average Precision optimization rather than deceptive raw accuracy.
+3. **Interpretable Model Architecture**: Constrain Decision Tree depth to $[2, 6]$ to preserve human cognitive interpretability while maintaining high fault recall.
+4. **Empirical Benchmarking**: Compare a Baseline Dummy Classifier against a tuned Decision Tree and Random Forest across eight academic classification metrics on held-out test data.
+5. **Exact Decision Path Traversal**: Implement an interactive Plotly-based decision journey visualizer that renders the exact root-to-leaf trajectory for any machine sample.
+6. **Educational Dissemination**: Provide interactive mathematical explanations of Gini Impurity, entropy, split gains, and permutation feature importance.
+
+---
+
+## 4. DATASET DESCRIPTION
+
+The research utilizes the official **UCI AI4I 2020 Predictive Maintenance Dataset** (UCI ID: 601), hosted by the University of California, Irvine Machine Learning Repository.
+
+### 4.1 Nature of the Dataset
+The dataset consists of 10,000 simulated observations reflecting real-world industrial milling operations. It is important to emphasize that **the dataset is synthetic**, generated by Dr. Stephan Matzka using physical modeling of milling machines to mirror realistic telemetry distributions without exposing proprietary industrial equipment secrets.
+
+### 4.2 Input Predictors (Strictly 6 Features)
+| Predictor Name | Data Type | Units | Min | Max | Mean | Std Dev |
+| :--- | :--- | :--- | :---: | :---: | :---: | :---: |
+| `Type` | Categorical | Quality Grade | `L` | `H` | — | — |
+| `Air temperature [K]` | Continuous | Kelvin ($K$) | 295.3 | 304.5 | 300.00 | 2.00 |
+| `Process temperature [K]`| Continuous | Kelvin ($K$) | 305.7 | 313.8 | 310.01 | 1.48 |
+| `Rotational speed [rpm]` | Continuous | Revolutions/min| 1168 | 2886 | 1538.78| 179.28 |
+| `Torque [Nm]` | Continuous | Newton-meters | 3.8 | 76.6 | 39.99 | 9.97 |
+| `Tool wear [min]` | Continuous | Minutes | 0.0 | 253.0 | 107.95 | 63.65 |
+
+- `Type`: Machine quality grade variant consisting of Low (`L`, 50%), Medium (`M`, 30%), and High (`H`, 20%).
+- `Air temperature [K]`: Environmental temperature generated via a random walk normalized to 300 K.
+- `Process temperature [K]`: Internal operating temperature, physically coupled to air temperature plus 10 K plus spindle heat dissipation.
+- `Rotational speed [rpm]`: Spindle velocity calculated around 1500 rpm with power overlays.
+- `Torque [Nm]`: Resistance torque normally distributed around 40 Nm with no negative values.
+- `Tool wear [min]`: Minutes of cutting tool contact; tool inserts are worn down over 200–240 minutes.
+
+### 4.3 Target Variable & Data Leakage Shield
+- **Target (`Machine failure`)**: Binary flag where $y=0$ indicates normal operation (9,661 samples, 96.61%) and $y=1$ indicates machine breakdown (339 samples, 3.39%).
+- **Quarantined Columns**:
+  - `UDI` (Unique Device Identifier 1 to 10,000)
+  - `Product ID` (e.g. `M14860`)
+  - `TWF` (Tool Wear Failure), `HDF` (Heat Dissipation Failure), `PWF` (Power Failure), `OSF` (Overstrain Failure), `RNF` (Random Failure).
+  - *Rationale*: These auxiliary failure indicators were generated during data simulation as causal reasons for the primary target. If included as input features, they cause catastrophic data leakage, granting the classifier trivial access to the ground truth. Our pipeline drops these columns during ingestion.
+
+---
+
+## 5. METHODOLOGY
+
+### 5.1 Preprocessing & Pipeline Construction
+To ensure strict train-test separation and eliminate data snooping:
+1. **Stratified Splitting**: The dataset is divided into an 80% training set ($N=8,000$, 271 failures) and a 20% test set ($N=2,000$, 68 failures) using `random_state=42` with stratification on $y$.
+2. **ColumnTransformer Construction**:
+   - `Type` is transformed into three binary dummy variables (`Type_H`, `Type_L`, `Type_M`) using `OneHotEncoder(handle_unknown="ignore", sparse_output=False)`.
+   - The five continuous features are passed through unchanged.
+   - *Design Decision*: Standard scaling or min-max normalization is deliberately omitted. Tree-based partitioning algorithms determine split thresholds monotonically along individual axes; scaling continuous features neither improves decision boundary selection nor affects tree geometry, but drastically harms human interpretability by turning understandable units ($55\ \text{Nm}$) into standardized z-scores ($+1.51\sigma$).
+3. **Pipeline Fitting**: The preprocessing transformer is fitted exclusively on the 8,000 training observations.
+
+---
+
+## 6. ALGORITHMS USED
+
+### 6.1 Baseline Model: Dummy Classifier
+The Dummy Classifier establishes the foundational baseline by predicting the majority class ($y=0$) for every sample:
+$$\hat{y} = \arg\max_k P(Y=k) = 0$$
+This illustrates the **Accuracy Paradox**: in imbalanced domains, achieving 96.6% accuracy requires zero machine intelligence and provides zero operational utility.
+
+### 6.2 Decision Tree Classifier
+A Decision Tree recursively partitions the 8-dimensional feature space into axis-parallel hyper-rectangles. At each node $m$, the algorithm searches over all features $j$ and split thresholds $\theta$ to divide subset $Q_m$ into $Q_{left}(\theta)$ and $Q_{right}(\theta)$, maximizing the reduction in impurity:
+
+$$\theta^* = \arg\max_\theta \left[ I(Q_m) - \left( \frac{|Q_{left}|}{|Q_m|} I(Q_{left}) + \frac{|Q_{right}|}{|Q_m|} I(Q_{right}) \right) \right]$$
+
+To counteract class imbalance, we evaluate cost-sensitive weighting (`class_weight='balanced'`), which weights each class inversely proportional to its training frequency:
+$$w_k = \frac{N}{2 \cdot N_k}$$
+
+### 6.3 Random Forest Classifier
+The Random Forest addresses the high variance and sample sensitivity of individual Decision Trees by constructing an ensemble of $B$ de-correlated trees:
+1. **Bootstrap Aggregation (Bagging)**: Each tree is trained on a distinct bootstrap sample of size $N$ drawn with replacement from the training data.
+2. **Random Subspace Selection**: At each candidate split, only a random subset of features $m \le \sqrt{p}$ or $0.5 \cdot p$ is evaluated.
+3. **Ensemble Aggregation**: Predictions are aggregated via soft voting:
+$$\hat{P}(Y=1 \mid \mathbf{x}) = \frac{1}{B} \sum_{b=1}^{B} P_b(Y=1 \mid \mathbf{x})$$
+
+---
+
+## 7. HYPERPARAMETER TUNING
+
+All tuning procedures were conducted using **Average Precision (PR-AUC)** as the optimization objective function. In rare-event classification, maximizing the area under the Precision-Recall curve penalizes false positives and false negatives far more effectively than ROC-AUC or accuracy.
+
+### 7.1 Decision Tree Tuning (GridSearchCV)
+- **Validation Scheme**: 5-Fold Stratified Cross-Validation (`random_state=42`).
+- **Search Space**:
+  - `criterion`: `['gini', 'entropy']`
+  - `max_depth`: `[2, 3, 4, 5, 6]` (constrained for white-box interpretability)
+  - `min_samples_split`: `[10, 20, 50]`
+  - `min_samples_leaf`: `[5, 10, 20]`
+  - `class_weight`: `['balanced', None]`
+  - *Total Candidates Evaluated*: 180 parameter combinations (900 fits).
+- **Optimal Hyperparameters Selected**:
+  ```python
+  {
+      'model__class_weight': 'balanced',
+      'model__criterion': 'entropy',
+      'model__max_depth': 6,
+      'model__min_samples_leaf': 10,
+      'model__min_samples_split': 10
+  }
+  ```
+- **Cross-Validation Average Precision Score**: **0.6601**
+
+### 7.2 Random Forest Tuning (RandomizedSearchCV)
+- **Validation Scheme**: 3-Fold Stratified Cross-Validation (`random_state=42`, 12 iterations).
+- **Search Distributions**:
+  - `n_estimators`: `[50, 100, 150]`
+  - `max_depth`: `[3, 5, 8, 12, None]`
+  - `min_samples_split`: `[2, 5, 10]`
+  - `min_samples_leaf`: `[1, 2, 4]`
+  - `max_features`: `['sqrt', 'log2', 0.5]`
+  - `class_weight`: `['balanced', 'balanced_subsample', None]`
+- **Optimal Hyperparameters Selected**:
+  ```python
+  {
+      'model__n_estimators': 100,
+      'model__max_depth': 12,
+      'model__max_features': 0.5,
+      'model__min_samples_leaf': 4,
+      'model__min_samples_split': 2,
+      'model__class_weight': None
+  }
+  ```
+- **Cross-Validation Average Precision Score**: **0.8041**
+
+---
+
+## 8. EXPERIMENTAL RESULTS
+
+All final evaluations were executed on the untouched 2,000-sample test set (1,932 healthy samples, 68 machine failures).
+
+### 8.1 Quantitative Model Benchmark
+| Model | Accuracy | Precision | Recall | F1-Score | Balanced Accuracy | ROC-AUC | PR-AUC (Average Precision) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Baseline (Dummy)** | 0.9660 | 0.0000 | 0.0000 | 0.0000 | 0.5000 | 0.5000 | 0.0340 |
+| **Decision Tree** | 0.9385 | 0.3410 | **0.8676** | 0.4896 | **0.9043** | 0.9267 | 0.6959 |
+| **Random Forest** | **0.9860** | **0.9000** | 0.6618 | **0.7627** | 0.8296 | **0.9737** | **0.8328** |
+
+### 8.2 Test Set Confusion Matrix Analysis
+```
+Decision Tree Confusion Matrix:
+               Predicted 0    Predicted 1
+Actual 0 (No)     1,818 (TN)      114 (FP)
+Actual 1 (Yes)        9 (FN)       59 (TP)
+
+Random Forest Confusion Matrix:
+               Predicted 0    Predicted 1
+Actual 0 (No)     1,927 (TN)        5 (FP)
+Actual 1 (Yes)       23 (FN)       45 (TP)
+```
+
+### 8.3 Operational Asymmetry of Classification Errors
+In industrial maintenance engineering, the cost function is heavily asymmetric:
+- **False Negative ($\text{FN}$)**: A machine failure is missed. The machine operates under heavy mechanical stress until catastrophic tool or spindle destruction occurs. Estimated operational cost: \$50,000 in ruined inventory, unscheduled production halt, and emergency repairs.
+- **False Positive ($\text{FP}$)**: A normal machine is flagged as faulty. A technician performs a routine 15-minute diagnostic check. Estimated operational cost: \$150 in labor.
+
+Because our tuned **Decision Tree** utilizes `class_weight='balanced'`, it prioritizes high sensitivity ($\text{Recall} = 86.76\%$), missing only **9 out of 68 failures**. Conversely, the **Random Forest** provides higher precision ($90.00\%$), generating only 5 false alarms across 2,000 test observations.
+
+### 8.4 Feature Importance Analysis
+Using 10-fold Permutation Importance on held-out test data (measured as degradation in PR-AUC), the sensor importance ranking emerged as:
+1. **Torque [Nm]**: Permutation Mean = +0.482 ($\pm 0.038$)
+2. **Rotational speed [rpm]**: Permutation Mean = +0.315 ($\pm 0.027$)
+3. **Tool wear [min]**: Permutation Mean = +0.228 ($\pm 0.019$)
+4. **Air temperature [K]**: Permutation Mean = +0.064 ($\pm 0.011$)
+5. **Process temperature [K]**: Permutation Mean = +0.031 ($\pm 0.008$)
+6. **Machine Type**: Permutation Mean = +0.005 ($\pm 0.002$)
+
+---
+
+## 9. EXPLAINABILITY FEATURE: INSIDE THE DECISION TREE
+
+The central differentiator of this project is the **Inside the Decision Tree** diagnostic module. Rather than relying on approximate local surrogates, this module queries the exact mathematical graph of the fitted `DecisionTreeClassifier`.
+
+### 9.1 Traversal Engine Implementation
+1. **One-Hot Name Decoding**: The pipeline translates transformed feature column indices back into human physical names (`Type_L`, `Torque [Nm]`, `Rotational speed [rpm]`) using `get_feature_names_out()`.
+2. **Path Identification**: When an observation $\mathbf{x}^*$ is passed, `tree_model.decision_path(X_trans)` returns the sparse indicator matrix of visited node indices $\{n_0, n_1, \dots, n_k\}$, while `tree_model.apply(X_trans)` identifies the terminating leaf.
+3. **Step-by-Step Rule Evaluation**: For every internal node along the journey, the system extracts:
+   - Feature evaluated $j$
+   - Learned split threshold $\theta_j$
+   - Measured sample value $x_j^*$
+   - Comparison: $x_j^* \le \theta_j$
+   - Boolean Evaluation (`TRUE` / `FALSE`)
+   - Direction taken (`LEFT` if true, `RIGHT` if false)
+   - Node impurity and training sample count
+
+### 9.2 Dynamic Route-Highlighted Plotly Visualization
+Using a bottom-up midpoint hierarchical layout algorithm, the entire tree topology (81 nodes, depth 6) is rendered in Plotly:
+- **Active Path Illumination**: Visited nodes and traversed edges glow with vivid cyan (`#38bdf8`) and gold (`#facc15`) markers and 4.5px thick line traces.
+- **Pruned Context Dimming**: Unvisited decision branches are rendered at 25% opacity with thin lines, preserving structural context without cluttering operator attention.
+- **Terminating Leaf Callout**: The final decision leaf is marked with an enlarged diamond marker displaying the final class assignment, sample support, and empirical failure probability.
+
+---
+
+## 10. CONCLUSION
+
+This project successfully implements the **Predictive Maintenance Explainability Lab**, fulfilling all academic and technical requirements:
+1. Proved that raw accuracy ($96.60\%$) is completely misleading for rare industrial failures and established Average Precision as the true metric of merit.
+2. Built robust Scikit-learn pipelines with zero data leakage, validating on untouched test telemetry.
+3. Demonstrated that a constrained Decision Tree can achieve an exceptional **86.76% failure recall** while remaining completely interpretable.
+4. Delivered a fully functional, interactive industrial Streamlit dashboard featuring live telemetry prediction, dynamic threshold tuning, and root-to-leaf decision path visualization.
+
+---
+
+## 11. FUTURE SCOPE
+
+1. **Multi-Class Failure Diagnostics**: Expand the prediction target from binary failure to five multi-class failure mechanisms (`TWF`, `HDF`, `PWF`, `OSF`, `RNF`) using a hierarchical decision tree.
+2. **Remaining Useful Life (RUL) Regression**: Integrate survival analysis and regression trees to predict exact remaining cutting tool lifetime in minutes.
+3. **Time-Series Sensor Telemetry**: Implement Recurrent Neural Networks (LSTMs) or 1D-CNNs for raw multi-sensor vibration and acoustic emission streams.
+4. **Edge Deployment**: Export the fitted tree decision rules to lightweight C/C++ or WebAssembly code for embedded execution directly inside PLC (Programmable Logic Controller) industrial firmware.
+
+---
+
+## 12. REFERENCES
+
+1. **Dataset**: Matzka, S. (2020). *AI4I 2020 Predictive Maintenance Dataset*. UCI Machine Learning Repository. [https://doi.org/10.24432/C5HS5C](https://doi.org/10.24432/C5HS5C).
+2. **Decision Trees**: Breiman, L., Friedman, J. H., Olshen, R. A., & Stone, C. J. (1984). *Classification and Regression Trees*. Wadsworth & Brooks/Cole Advanced Books & Software.
+3. **Random Forests**: Breiman, L. (2001). *Random Forests*. Machine Learning, 45(1), 5–32.
+4. **Cost-Sensitive Learning**: Elkan, C. (2001). *The Foundations of Cost-Sensitive Learning*. Proceedings of the 17th International Joint Conference on Artificial Intelligence (IJCAI), 973–978.
+5. **Evaluation of Imbalanced Telemetry**: Saito, T., & Rehmsmeier, M. (2015). *The Precision-Recall Plot Is More Informative than the ROC Plot When Evaluating Imbalanced Datasets*. PLoS ONE, 10(3): e0118432.
+6. **Permutation Feature Importance**: Fisher, A., Rudin, C., & Zhou, D. (2019). *All Models are Wrong, but Many are Useful: Learning a Variable's Importance by Considering All Possible Prediction Models Simultaneously*. Journal of Machine Learning Research (JMLR), 20(177), 1–81.
